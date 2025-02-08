@@ -709,7 +709,7 @@ class PDFSecurityTester:
                     self.logger.error(f"Failed to add structure payload {payload.name}: {str(e)}")
                     self._record_payload_execution(payload, False, str(e))
 
-    def _add_pdf_object(self, writer: PdfWriter, content: Union[str, bytes, dict]) -> None:
+    def _add_pdf_object(self, writer: PdfWriter, content: str | bytes | dict[str, Any]) -> None:
         """Add a PDF object to the document using PyPDF2 3.0+ API"""
         from PyPDF2.generic import (
             DictionaryObject, 
