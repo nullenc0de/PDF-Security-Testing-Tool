@@ -718,60 +718,88 @@ class PDFSecurityTester:
             StreamObject,
             ArrayObject,
             NumberObject,
-            BooleanObject
+            BooleanObject,
+            create_string_object
         )
         
         try:
-            if isinstance(content, (str, bytes)):
-                if isinstance(content, str):
-                    content = content.strip()
-                    if content.startswith('<<') and content.endswith('>>'):
-                        # Parse dictionary format
-                        obj = DictionaryObject()
-                        # Basic parser for PDF dictionary syntax
-                        content = content[2:-2].strip()
-                        parts = content.split('/')
-                        for part in parts[1:]:  # Skip empty first part
-                            if not part.strip():
-                                continue
-                            key_value = part.strip().split(' ', 1)
-                            if len(key_value) == 2:
-                                key, value = key_value
-                                # Handle different value types
-                                if value.startswith('(') and value.endswith(')'):
-                                    value = TextStringObject(value[1:-1])
-                                elif value.startswith('[') and value.endswith(']'):
-                                    value = ArrayObject([NumberObject(x) for x in value[1:-1].split()])
-                                elif value.lower() in ('true', 'false'):
-                                    value = BooleanObject(value.lower() == 'true')
-                                else:
-                                    try:
-                                        value = NumberObject(float(value))
-                                    except ValueError:
-                                        value = TextStringObject(value)
-                                obj[NameObject('/' + key)] = value
-                        
-                        writer._add_object(obj)
-                    else:
-                        # Add as stream
-                        stream = StreamObject()
-                        stream._data = content.encode() if isinstance(content, str) else content
-                        writer._add_object(stream)
-                else:
-                    # Binary content
-                    stream = StreamObject()
-                    stream._data = content
-                    writer._add_object(stream)
-            elif isinstance(content, dict):
-                # Handle dictionary input
+            if isinstance(content, dict):
                 obj = DictionaryObject()
                 for key, value in content.items():
                     if not key.startswith('/'):
                         key = '/' + key
-                    obj[NameObject(key)] = TextStringObject(str(value))
+                    
+                    # Handle nested dictionaries
+                    if isinstance(value, dict):
+                        nested_obj = DictionaryObject()
+                        for k, v in value.items():
+                            if not k.startswith('/'):
+                                k = '/' + k
+                            if isinstance(v, (list, tuple)):
+                                nested_obj[NameObject(k)] = ArrayObject([
+                                    NumberObject(x) if isinstance(x, (int, float))
+                                    else NameObject(f"/{x}") if isinstance(x, str) and not x.startswith('(')
+                                    else TextStringObject(x[1:-1]) if isinstance(x, str) and x.startswith('(')
+                                    else TextStringObject(str(x))
+                                    for x in v
+                                ])
+                            else:
+                                nested_obj[NameObject(k)] = (
+                                    NameObject(f"/{v}") if isinstance(v, str) and not v.startswith('(')
+                                    else TextStringObject(v[1:-1]) if isinstance(v, str) and v.startswith('(')
+                                    else TextStringObject(str(v))
+                                )
+                        obj[NameObject(key)] = nested_obj
+                    # Handle arrays
+                    elif isinstance(value, (list, tuple)):
+                        obj[NameObject(key)] = ArrayObject([
+                            NumberObject(x) if isinstance(x, (int, float))
+                            else NameObject(f"/{x}") if isinstance(x, str) and not x.startswith('(')
+                            else TextStringObject(x[1:-1]) if isinstance(x, str) and x.startswith('(')
+                            else TextStringObject(str(x))
+                            for x in value
+                        ])
+                    # Handle stream data
+                    elif key == '_stream_data':
+                        stream = StreamObject()
+                        stream._data = value if isinstance(value, bytes) else value.encode()
+                        obj[NameObject('/Length')] = NumberObject(len(stream._data))
+                        obj.update(stream)
+                    # Handle regular values
+                    else:
+                        obj[NameObject(key)] = (
+                            NameObject(f"/{value}") if isinstance(value, str) and not value.startswith('(')
+                            else TextStringObject(value[1:-1]) if isinstance(value, str) and value.startswith('(')
+                            else NumberObject(value) if isinstance(value, (int, float))
+                            else BooleanObject(value) if isinstance(value, bool)
+                            else TextStringObject(str(value))
+                        )
+                
                 writer._add_object(obj)
+            
+            elif isinstance(content, (str, bytes)):
+                stream = StreamObject()
+                stream._data = content if isinstance(content, bytes) else content.encode()
+                stream[NameObject('/Length')] = NumberObject(len(stream._data))
+                writer._add_object(stream)
+                
         except Exception as e:
             raise ValueError(f"Failed to add PDF object: {str(e)}")
+
+    def _add_signature(self, writer: PdfWriter, field_name: str, reason: str = None) -> None:
+        """Add a digital signature placeholder to the PDF"""
+        from PyPDF2.generic import create_string_object
+        try:
+            writer.add_unsigned_signature(
+                field_name=field_name,
+                sig_dict={
+                    "/Type": "/Sig",
+                    "/Filter": "/Adobe.PPKLite",
+                    "/SubFilter": "/adbe.pkcs7.detached",
+                    "/Name": field_name,
+                    "/Reason": reason or "Security Test",
+                    "/Location": "PDF Security Test",
+                    "/SigningTime": "
 
     def add_font_payloads(self, writer: PdfWriter) -> None:
         """Add font-based test payloads"""
