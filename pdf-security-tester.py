@@ -709,34 +709,97 @@ class PDFSecurityTester:
                     self.logger.error(f"Failed to add structure payload {payload.name}: {str(e)}")
                     self._record_payload_execution(payload, False, str(e))
 
+    def _add_pdf_object(self, writer: PdfWriter, content: Union[str, bytes, dict]) -> None:
+        """Add a PDF object to the document using PyPDF2 3.0+ API"""
+        from PyPDF2.generic import (
+            DictionaryObject, 
+            NameObject, 
+            TextStringObject,
+            StreamObject,
+            ArrayObject,
+            NumberObject,
+            BooleanObject
+        )
+        
+        try:
+            if isinstance(content, (str, bytes)):
+                if isinstance(content, str):
+                    content = content.strip()
+                    if content.startswith('<<') and content.endswith('>>'):
+                        # Parse dictionary format
+                        obj = DictionaryObject()
+                        # Basic parser for PDF dictionary syntax
+                        content = content[2:-2].strip()
+                        parts = content.split('/')
+                        for part in parts[1:]:  # Skip empty first part
+                            if not part.strip():
+                                continue
+                            key_value = part.strip().split(' ', 1)
+                            if len(key_value) == 2:
+                                key, value = key_value
+                                # Handle different value types
+                                if value.startswith('(') and value.endswith(')'):
+                                    value = TextStringObject(value[1:-1])
+                                elif value.startswith('[') and value.endswith(']'):
+                                    value = ArrayObject([NumberObject(x) for x in value[1:-1].split()])
+                                elif value.lower() in ('true', 'false'):
+                                    value = BooleanObject(value.lower() == 'true')
+                                else:
+                                    try:
+                                        value = NumberObject(float(value))
+                                    except ValueError:
+                                        value = TextStringObject(value)
+                                obj[NameObject('/' + key)] = value
+                        
+                        writer._add_object(obj)
+                    else:
+                        # Add as stream
+                        stream = StreamObject()
+                        stream._data = content.encode() if isinstance(content, str) else content
+                        writer._add_object(stream)
+                else:
+                    # Binary content
+                    stream = StreamObject()
+                    stream._data = content
+                    writer._add_object(stream)
+            elif isinstance(content, dict):
+                # Handle dictionary input
+                obj = DictionaryObject()
+                for key, value in content.items():
+                    if not key.startswith('/'):
+                        key = '/' + key
+                    obj[NameObject(key)] = TextStringObject(str(value))
+                writer._add_object(obj)
+        except Exception as e:
+            raise ValueError(f"Failed to add PDF object: {str(e)}")
+
     def add_font_payloads(self, writer: PdfWriter) -> None:
         """Add font-based test payloads"""
-        # Create a malicious Type 1 font with buffer overflow potential
-        malicious_font = """
-        %!PS-AdobeFont-1.0
-        %%CreationDate: 2024
-        12 dict begin
-        /FontName /MaliciousFont def
-        /Encoding StandardEncoding def
-        """ + ("A" * 10000)  # Potential buffer overflow
-        
         font_payloads = [
             TestPayload(
                 name="Malicious Font",
-                content=malicious_font,
+                content={
+                    'Type': '/Font',
+                    'Subtype': '/Type1',
+                    'BaseFont': '/' + ('A' * 1000),  # Long font name
+                    'Encoding': {
+                        'Type': '/Encoding',
+                        'Differences': [1, '/a', '/b', '/c' * 1000]  # Large differences array
+                    }
+                },
                 category=PayloadCategory.FONT_ATTACKS,
-                description="Tests handling of malformed fonts",
-                viewer_requirements=["PDF processors with font rendering"],
-                expected_outcome="Should detect and reject malformed font",
+                description="Tests font handling",
+                viewer_requirements=["PDF processors with font support"],
+                expected_outcome="Should handle malformed fonts",
                 severity="High",
-                mitigation="Validate embedded fonts"
+                mitigation="Validate font objects"
             )
         ]
         
         for payload in font_payloads:
             if self._should_include_payload(payload):
                 try:
-                    writer.addObject(payload.content)
+                    self._add_pdf_object(writer, payload.content)
                     self._record_payload_execution(payload, True)
                 except Exception as e:
                     self.logger.error(f"Failed to add font payload {payload.name}: {str(e)}")
