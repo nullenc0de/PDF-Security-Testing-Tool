@@ -799,7 +799,13 @@ class PDFSecurityTester:
                     "/Name": field_name,
                     "/Reason": reason or "Security Test",
                     "/Location": "PDF Security Test",
-                    "/SigningTime": "
+                    "/SigningTime": datetime.now().strftime("%Y%m%d%H%M%S"),
+                    "/ByteRange": [0, 1000000],
+                    "/Contents": create_string_object("A" * 2048)  # Placeholder signature content
+                }
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to add signature: {str(e)}")
 
     def add_font_payloads(self, writer: PdfWriter) -> None:
         """Add font-based test payloads"""
