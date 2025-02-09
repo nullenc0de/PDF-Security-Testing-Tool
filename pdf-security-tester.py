@@ -32,7 +32,6 @@ except ImportError as e:
     print("Please install required packages: pip install PyPDF2 reportlab")
     exit(1)
 
-# Version compatibility check
 if pdf_version < "3.0.0":
     warnings.warn("PyPDF2 version 3.0.0 or newer is recommended")
 
@@ -80,39 +79,7 @@ class TestPayload:
 
     def validate(self) -> bool:
         """Validate payload attributes"""
-        if args.config:
-        try:
-            with open(args.config) as f:
-                config = json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading configuration file: {str(e)}")
-            return
-
-    try:
-        tester = PDFSecurityTester(callback_url, config)
-        tester.create_security_test_pdf(args.output)
-        
-        print("\nPDF Security Test Suite - Complete")
-        print(f"\nGenerated files:")
-        print(f"1. Test PDF: {args.output}")
-        print(f"2. Test Report: {args.output}.report.json")
-        
-        print("\nNext Steps:")
-        print("1. Review the test report for payload details")
-        print("2. Upload the PDF to your testing environment")
-        print("3. Monitor the callback URL for active payloads")
-        print("4. Test with different PDF viewers:")
-        print("   - Adobe Acrobat DC (JavaScript execution)")
-        print("   - PDF.js (Content rendering)")
-        print("   - Chrome PDF Viewer (Basic rendering)")
-        print("5. Review processing logs for errors")
-        
-    except Exception as e:
-        logger.error(f"Error running security tests: {str(e)}")
-        raise
-
-if __name__ == "__main__":
-    main() not self.name or not isinstance(self.name, str):
+        if not self.name or not isinstance(self.name, str):
             return False
         if not self.content:
             return False
@@ -147,12 +114,10 @@ def pdf_operation_context(operation_name: str, logger: logging.Logger):
         logger.info(f"Completed {operation_name} in {duration:.2f}s")
     except Exception as e:
         logger.error(f"Critical failure during {operation_name}: {str(e)}")
-        logger.debug(f"Stack trace:", exc_info=True)
+        logger.debug("Stack trace:", exc_info=True)
         raise PDFSecurityException(f"{operation_name} failed: {str(e)}") from e
 
 class PDFSecurityTester:
-    """Main class for PDF security testing"""
-
     def __init__(self, callback_url: str, config: Optional[Dict] = None):
         """Initialize the PDF Security Tester"""
         if not self._validate_callback_url(callback_url):
@@ -187,7 +152,7 @@ class PDFSecurityTester:
             if result.scheme not in ['http', 'https']:
                 return False
             if result.username or result.password:
-                return False  # Don't allow credentials in URL
+                return False
             return True
         except Exception:
             return False
@@ -235,7 +200,6 @@ class PDFSecurityTester:
                 timeout = self.config['callback_timeout']
                 if not isinstance(timeout, (int, float)) or timeout <= 0:
                     raise ConfigurationError("callback_timeout must be a positive number")
-                    
         except Exception as e:
             self.logger.error(f"Configuration validation error: {str(e)}")
             raise ConfigurationError(f"Configuration validation failed: {str(e)}")
@@ -243,19 +207,16 @@ class PDFSecurityTester:
     def _sanitize_payload_content(self, content: str | bytes) -> str | bytes:
         """Basic sanitization of payload content"""
         if isinstance(content, str):
-            # Remove null bytes and other dangerous characters
             sanitized = content.replace("\0", "")
-            # Basic XSS protection for HTML content
             if "<" in content:
                 sanitized = sanitized.replace("<script", "&lt;script")
             return sanitized
         elif isinstance(content, bytes):
-            # Remove null bytes from binary content
             return content.replace(b"\0", b"")
         return content
 
     def _record_payload_execution(self, payload: TestPayload, success: bool, error: Optional[str] = None) -> None:
-        """Record payload execution status and update tracking"""
+        """Record payload execution status"""
         entry = {
             'timestamp': datetime.now().isoformat(),
             'payload': payload.name,
@@ -274,11 +235,63 @@ class PDFSecurityTester:
             self.failed_payloads.append((payload, error or "Unknown error"))
             self.logger.warning(f"Failed to execute payload {payload.name}: {error}")
 
-    def _create_in_memory_pdf(self) -> Tuple[canvas.Canvas, io.BytesIO]:
-        """Create a PDF in memory"""
-        buffer = io.BytesIO()
-        c = canvas.Canvas(buffer, pagesize=letter)
-        return c, buffer
+    def _should_include_payload(self, payload: TestPayload) -> bool:
+        """Determine if a payload should be included based on configuration"""
+        if not self.config:
+            return True
+            
+        if 'enabled_categories' in self.config:
+            if payload.category.value not in self.config['enabled_categories']:
+                return False
+        
+        if 'excluded_payloads' in self.config:
+            if payload.name in self.config['excluded_payloads']:
+                return False
+        
+        if 'min_severity' in self.config:
+            config_severity = SecurityLevel(self.config['min_severity'])
+            if payload.severity.value < config_severity.value:
+                return False
+        
+        return True
+
+    def _load_custom_payloads(self) -> None:
+        """Load and validate custom payloads"""
+        if 'custom_payloads' not in self.config:
+            return
+
+        required_fields = {'name', 'content', 'category', 'severity'}
+        
+        for payload_data in self.config.get('custom_payloads', []):
+            try:
+                missing_fields = required_fields - set(payload_data.keys())
+                if missing_fields:
+                    raise ValidationError(f"Missing required fields: {missing_fields}")
+                
+                category = PayloadCategory(payload_data['category'])
+                severity = SecurityLevel(payload_data['severity'])
+                
+                payload = TestPayload(
+                    name=payload_data['name'],
+                    content=self._sanitize_payload_content(payload_data['content']),
+                    category=category,
+                    description=payload_data.get('description', 'Custom payload'),
+                    viewer_requirements=payload_data.get('viewer_requirements', ['Unknown']),
+                    expected_outcome=payload_data.get('expected_outcome', 'Unknown'),
+                    severity=severity,
+                    mitigation=payload_data.get('mitigation', 'Unknown'),
+                    tags=payload_data.get('tags', []),
+                    references=payload_data.get('references', [])
+                )
+                
+                if not payload.validate():
+                    raise ValidationError(f"Invalid payload data for {payload.name}")
+                
+                self.custom_payloads.append(payload)
+                self.logger.info(f"Loaded custom payload: {payload.name}")
+                
+            except Exception as e:
+                self.logger.warning(f"Skipping invalid custom payload: {str(e)}")
 
     def add_metadata_payloads(self, writer: PdfWriter) -> None:
         """Add metadata-based test payloads"""
@@ -329,7 +342,6 @@ class PDFSecurityTester:
         failed_payloads = 0
         
         with pdf_operation_context("PDF creation", self.logger):
-            # Add metadata payloads
             try:
                 self.add_metadata_payloads(writer)
                 successful_payloads += 1
@@ -337,12 +349,10 @@ class PDFSecurityTester:
                 self.logger.error(f"Error adding metadata payloads: {str(e)}")
                 failed_payloads += 1
             
-            # Save and validate the PDF
             try:
                 with open(output_path, 'wb') as output_file:
                     writer.write(output_file)
                 
-                # Generate report
                 self._generate_report(output_path, {
                     'successful_payloads': successful_payloads,
                     'failed_payloads': failed_payloads,
@@ -384,12 +394,11 @@ class PDFSecurityTester:
         
         self.logger.info(f"Test report generated: {report_path}")
         
-        # Print summary
         print("\nTest Execution Summary:")
-        print(f"Total Payloads: {stats['total_payloads']}")
         print(f"Successful: {stats['successful_payloads']}")
         print(f"Failed: {stats['failed_payloads']}")
         print(f"\nDetailed report saved to: {report_path}")
+
 
 def main():
     """Main execution function"""
@@ -425,4 +434,37 @@ def main():
     
     # Load configuration if provided
     config = None
-    if
+    if args.config:
+        try:
+            with open(args.config) as f:
+                config = json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading configuration file: {str(e)}")
+            return
+
+    try:
+        tester = PDFSecurityTester(callback_url, config)
+        tester.create_security_test_pdf(args.output)
+        
+        print("\nPDF Security Test Suite - Complete")
+        print(f"\nGenerated files:")
+        print(f"1. Test PDF: {args.output}")
+        print(f"2. Test Report: {args.output}.report.json")
+        
+        print("\nNext Steps:")
+        print("1. Review the test report for payload details")
+        print("2. Upload the PDF to your testing environment")
+        print("3. Monitor the callback URL for active payloads")
+        print("4. Test with different PDF viewers:")
+        print("   - Adobe Acrobat DC (JavaScript execution)")
+        print("   - PDF.js (Content rendering)")
+        print("   - Chrome PDF Viewer (Basic rendering)")
+        print("5. Review processing logs for errors")
+        
+    except Exception as e:
+        logger.error(f"Error running security tests: {str(e)}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
