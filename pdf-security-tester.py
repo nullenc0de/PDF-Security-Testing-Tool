@@ -1,4 +1,150 @@
-"""
+def add_malformed_structure_payloads(self, writer: PdfWriter) -> None:
+        """Add malformed PDF structure payloads"""
+        from PyPDF2.generic import (
+            DictionaryObject,
+            NameObject,
+            NumberObject,
+            StreamObject,
+            ArrayObject,
+            IndirectObject
+        )
+        
+        # Create pages for circular reference test
+        page1 = DictionaryObject({
+            NameObject('/Type'): NameObject('/Pages'),
+            NameObject('/Kids'): ArrayObject([]),  # Will be updated
+            NameObject('/Count'): NumberObject(1)
+        })
+        
+        page2 = DictionaryObject({
+            NameObject('/Type'): NameObject('/Page'),
+            NameObject('/Parent'): None  # Will be updated
+        })
+        
+        # Add pages to PDF
+        page1_ref = writer._add_object(page1)
+        page2_ref = writer._add_object(page2)
+        
+        # Create circular reference
+        page1[NameObject('/Kids')].append(page2_ref)
+        page2[NameObject('/Parent')] = page1_ref
+        
+        structure_payloads = [
+            TestPayload(
+                name="Overlapping Objects",
+                content={
+                    'Type': '/Object',
+                    '_stream_data': b'A' * 1000,
+                    'Length': 1000
+                },
+                category=PayloadCategory.PDF_STRUCTURE,
+                description="Tests handling of overlapping object numbers",
+                viewer_requirements=["Any PDF processor"],
+                expected_outcome="Should detect and reject duplicate objects",
+                severity="High",
+                mitigation="Validate object numbering"
+            ),
+            TestPayload(
+                name="Circular References",
+                content={
+                    'Type': '/Pages',
+                    'Kids': [page2_ref],
+                    'Count': 1
+                },
+                category=PayloadCategory.PDF_STRUCTURE,
+                description="Tests handling of circular object references",
+                viewer_requirements=["Any PDF processor"],
+                expected_outcome="Should detect circular references",
+                severity="High",
+                mitigation="Check for circular references"
+            )
+        ]
+        
+        for payload in structure_payloads:
+            if self._should_include_payload(payload):
+                try:
+                    # Create dictionary object
+                    obj = DictionaryObject()
+                    for key, value in payload.content.items():
+                        if key == '_stream_data':
+                            continue
+                        obj[NameObject(f"/{key}")] = (
+                            value if isinstance(value, IndirectObject)
+                            else ArrayObject(value) if isinstance(value, list)
+                            else NumberObject(value) if isinstance(value, (int, float))
+                            else NameObject(value) if isinstance(value, str) and value.startswith('/')
+                            else TextStringObject(str(value))
+                        )
+                    
+                    # Add stream data if present
+                    if '_stream_data' in payload.content:
+                        stream = StreamObject()
+                        stream._data = payload.content['_stream_data']
+                        stream[NameObject('/Length')] = NumberObject(len(stream._data))
+                        obj.update(stream)
+                    
+                    # Add to PDF
+                    writer._add_object(obj)
+                    self._record_payload_execution(payload, True)
+                except Exception as e:
+                    self.logger.error(f"Failed to add structure payload {payload.name}: {str(e)}")
+                    self._record_payload_execution(payload, False, str(e))
+
+    def create_security_test_pdf(self, output_path: str) -> None:
+        """Create a PDF with security test payloads"""
+        writer = PdfWriter()
+        successful_payloads = 0
+        failed_payloads = 0
+        
+        try:
+            # Add test payloads
+            test_methods = [
+                self.add_metadata_payloads,
+                self.add_javascript_payloads,
+                self._add_test_pages,
+                self.add_embedded_file_payloads,
+                self.add_signature_payloads,
+                self.add_structure_payloads,
+                self.add_font_payloads,
+                self.add_form_payloads,
+                self.add_annotation_payloads,
+                self.add_advanced_javascript_payloads,
+                self.add_malformed_structure_payloads,
+                self.add_resource_exhaustion_tests
+            ]
+            
+            for method in test_methods:
+                try:
+                    method(writer)
+                    successful_payloads += 1
+                except Exception as e:
+                    self.logger.error(f"Error in {method.__name__}: {str(e)}")
+                    failed_payloads += 1
+            
+            # Validate PDF structure
+            try:
+                # Write to temporary buffer for validation
+                temp_buffer = io.BytesIO()
+                writer.write(temp_buffer)
+                temp_buffer.seek(0)
+                
+                # Try to read it back to validate
+                PdfReader(temp_buffer)
+                
+                # If we get here, the PDF is valid
+                with open(output_path, 'wb') as output_file:
+                    writer.write(output_file)
+            except Exception as e:
+                self.logger.error(f"PDF validation failed: {str(e)}")
+                raise ValueError("Generated PDF failed validation")
+            
+            # Generate test report
+            self._generate_report(output_path, {
+                'successful_payloads': successful_payloads,
+                'failed_payloads': failed_payloads,
+                'total_payloads': len(self.execution_log)
+            })
+            """
 PDF Security Testing Tool
 ------------------------
 
